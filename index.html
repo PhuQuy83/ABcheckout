@@ -1,0 +1,28 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Quy-Quy Shop</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header>
+    <h1 style: color="red">Quy-Quy Shop</h1>
+    <a class="cart-link" href="checkout.html" align="right"><img src="./cart.jpg" width="10%"> (<span id="cart-count">0</span>)</a>
+  </header>
+
+  <main id="products"></main>
+
+  <template id="product-tpl">
+    <article class="product">
+      <img src="" alt="" class="product-img">
+      <h3 class="product-name"></h3>
+      <div class="product-price"></div>
+      <button class="add-btn">Add to cart</button>
+    </article>
+  </template>
+
+  <script src="./cart.js" defer></script>
+</body>
+</html>

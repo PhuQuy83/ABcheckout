@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Quy-Quy Checkout</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Hosted tokenization library (sandbox) -->
+    <script src="https://tokenization.sandbox.echelonsecure.app/tokenization/v0.3" defer></script>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f2bddd; }
+        .container { max-width: 900px; margin: 2rem auto; background: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+        .form-row { display:flex; gap:12px; align-items:center; margin-bottom:1rem; }
+        .form-group { flex:1; }
+        label { display:block; margin-bottom:0.25rem; font-weight:bold; }
+        input[type="text"], input[type="email"], input[type="tel"], input[type="number"] { width:100%; padding:0.5rem; border:1px solid #ccc; border-radius:4px; }
+        #my-div { margin-bottom:1rem; min-height: 60px; }
+        .btn { padding:0.75rem 2rem; font-size:1rem; background:#0078d4; color:#fff; border:none; border-radius:4px; cursor:pointer; }
+        .btn[disabled] { opacity: .6; cursor: not-allowed; }
+        #error-message { color:red; min-height:1.5em; margin-top:.5rem; }
+        #result { margin-top:1rem; min-height:1.5em; }
+        header { max-width:900px; margin: 1rem auto 0; display:flex; justify-content:space-between; align-items:center; }
+        .cart-row img { width:80px; height:80px; object-fit:cover; border-radius:6px; margin-right:12px; }
+    </style>
+</head>
+<body>
+  <header>
+    <h1 style="color:red;">Checkout</h1>
+    <a class="cart-link" href="index.html"><img src="./home.png" width="10%" align="right"></a>
+  </header>
+
+  <main class="container">
+    <section id="cart-summary" aria-live="polite"></section>
+
+    <form id="checkout-form" novalidate>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="name">Full name</label>
+          <input id="name" name="name" type="text" required />
+        </div>
+        <p>
+        <div class="form-group">
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" required />
+        </div>
+        <p>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="phone">Phone</label>
+          <input id="phone" name="phone" type="tel" />
+        </div>
+        <p>
+        <div class="form-group">
+          <label for="address">Address</label>
+          <input id="address" name="address" type="text" />
+        </div>
+        <p>
+        <div class="form-group">
+          <label for="zip">ZIP</label>
+          <input id="zip" name="zip" type="text" />
+        </div>
+      </div>
+
+      <!-- Tokenization iframe target -->
+      <div id="my-div" aria-live="polite" aria-label="Payment widget container"></div>
+
+      <div id="error-message" role="alert"></div>
+      <div id="result" role="status" aria-live="polite"></div>
+
+      <button class="btn" id="submit-btn" type="submit">Pay</button>
+    </form>
+  </main>
+
+  <script>
+    // Helpers
+    function getCart() {
+      try { return JSON.parse(localStorage.getItem('cart') || '{}'); } catch { return {}; }
+    }
+    function formatCurrency(n){ return Number(n).toFixed(2); }
+
+    function renderSummary() {
+      const cart = getCart();
+      const items = Object.values(cart);
+      const container = document.getElementById('cart-summary');
+      if (!items.length) {
+        container.innerHTML = '<p>Your cart is empty.</p>';
+        return;
+      }
+      let subtotal = 0;
+      const rows = items.map(it => {
+        const line = it.price * (it.qty || 0);
+        subtotal += line;
+        const imgHtml = `<img src="${it.img}" alt="${(it.name||'').replace(/"/g,'&quot;')}" />`;
+        return `<div class="cart-row" style="display:flex;align-items:center;gap:12px;padding:8px 0;">
+          ${imgHtml}
+          <div style="flex:1">
+            <strong style="display:block;margin-bottom:6px">${it.name}</strong>
+            <div style="color:#555">${it.qty} × $${formatCurrency(it.price)} = $${formatCurrency(line)}</div>
+          </div>
+          <div style="font-weight:700">$${formatCurrency(line)}</div>
+        </div>`;
+      }).join('');
+      const tax = 1.99, shipping = 2.99, total = subtotal + tax + shipping;
+      container.innerHTML = `${rows}<hr><div>Sub-total: $${formatCurrency(subtotal)}</div><div>Tax: $${formatCurrency(tax)}</div><div>Shipping: $${formatCurrency(shipping)}</div><h3>Total: $${formatCurrency(total)}</h3>`;
+      container.dataset.total = formatCurrency(total);
+      container.dataset.subtotal = formatCurrency(subtotal);
+    }
+
+    // Ensure hosted library is ready (defer should load it, but wait safely)
+    function ensureHostedTokenizationReady(timeout = 3000) {
+      return new Promise((resolve, reject) => {
+        if (window.HostedTokenization) return resolve(window.HostedTokenization);
+        const start = Date.now();
+        const id = setInterval(() => {
+          if (window.HostedTokenization) {
+            clearInterval(id);
+            return resolve(window.HostedTokenization);
+          }
+          if (Date.now() - start > timeout) {
+            clearInterval(id);
+            return reject(new Error('Hosted tokenization library did not load'));
+          }
+        }, 100);
+      });
+    }
+
+    // Normalize nonce/token to gateway pattern:
+    function normalizeNonce(raw) {
+      if (!raw) return null;
+      raw = String(raw).trim();
+      const pat = /^(?:tkn|nonce|ref|pm)-[A-Za-z0-9]+$/;
+      if (pat.test(raw)) return raw;
+      const cleaned = raw.replace(/[^A-Za-z0-9]/g, '');
+      if (!cleaned) return null;
+      return 'nonce-' + cleaned;
+    }
+
+    document.addEventListener('DOMContentLoaded', async function () {
+      renderSummary();
+
+      const form = document.getElementById('checkout-form');
+      const errorMessageEl = document.getElementById('error-message');
+      const resultEl = document.getElementById('result');
+      const submitBtn = document.getElementById('submit-btn');
+
+
+     
+      // Wait for hosted library
+      let HostedTokenization;
+      try {
+        HostedTokenization = await ensureHostedTokenizationReady();
+      } catch (err) {
+        errorMessageEl.textContent = 'Payment library failed to load. Try reloading the page.';
+        console.error(err);
+        return;
+      }
+
+      // Initialize widget
+      const tokenizationSourceKey = 'pk_mO4f9acO6galdE3AT6kT4sjIdtjZ5'; // replace with your public key
+
+      // Paay 3DS configuration
+      const threeDSoptions = {
+        sourceKey: "63407156722bac9ad408645c981b9e3a1341594e",
+        apiKey: "a4ab31563771612708238b238e61251d",  // Your Paay API Key
+        frictionless: false,                          // true = suppress any challenge window
+        timeout: 30 * 1000,                          // fail challenge after N seconds; omit to disable
+        env: 'test'                                  // 'test' | 'prod'; defaults to 'prod'
+      };
+
+      // Initialize hosted tokenization with threeDS options
+      const hostedOptions = { target: '#my-div', threeDS: threeDSoptions };
+      
+
+
+      let hostedTokenization;
+      try {
+        hostedTokenization = new window.HostedTokenization(tokenizationSourceKey, hostedOptions);
+      } catch (err) {
+        console.error('HostedTokenization init failed', err);
+        errorMessageEl.textContent = 'Unable to initialize payment widget.';
+        return;
+      }
+
+      form.addEventListener('submit', async function (e) {
+        e.preventDefault();
+        errorMessageEl.textContent = '';
+        resultEl.textContent = '';
+
+        const name = form.name.value.trim();
+        const email = form.email.value.trim();
+        if (!name || !email) {
+          errorMessageEl.textContent = 'Name and email are required.';
+          return;
+        }
+
+        const cartSummary = document.getElementById('cart-summary');
+        const amount = parseFloat(cartSummary.dataset.total || '0.00');
+        const cart = getCart();
+
+        // Disable UI while tokenizing and processing
+        submitBtn.disabled = true;
+        resultEl.textContent = 'Obtaining secure payment token...';
+
+        let tokenResult;
+        try {
+          tokenResult = await hostedTokenization.getNonceToken();
+        } catch (err) {
+          console.error('getNonceToken error', err);
+          errorMessageEl.textContent = err && err.message ? err.message : 'Tokenization failed.';
+          submitBtn.disabled = false;
+          resultEl.textContent = '';
+          return;
+        }
+
+        const raw = tokenResult && (tokenResult.nonce || tokenResult.token || tokenResult.data?.nonce || tokenResult.data?.token) || null;
+        const nonce = normalizeNonce(raw);
+        if (!nonce) {
+          errorMessageEl.textContent = tokenResult && tokenResult.error ? tokenResult.error : 'Tokenization did not return a usable nonce/token.';
+          submitBtn.disabled = false;
+          resultEl.textContent = '';
+          return;
+        }
+
+        // Run Paay 3DS verification before sending to server.
+        // If it fails, we log it and continue without 3DS (soft fail).
+        resultEl.textContent = 'Running 3D Secure verification...';
+        let threeDSResult = null;
+        try {
+          threeDSResult = await hostedTokenization.verify3DS({
+            amount,
+            currency: 'USD',
+            customer: {
+              name,
+              email,
+              phone: form.phone.value.trim(),
+            },
+            billingAddress: {
+              line1: form.address.value.trim(),
+              postalCode: form.zip.value.trim()
+            },
+            nonce,
+          });
+        } catch (err) {
+          console.error('verify3DS error (continuing without 3DS)', err);
+          // Do not block the payment; just proceed without 3D Secure data.
+        }
+        //<button onclick="pay()">Pay</button>
+
+        resultEl.textContent = 'Sending payment to server... (nonce: ' + nonce + ')';
+
+        try {
+          const body = {
+              nonce, 
+              expiryMonth: tokenResult.expiryMonth, 
+              expiryYear: tokenResult.expiryYear, 
+              amount,
+              cart,
+              threeDSResult,
+              customer: { 
+                name, 
+                email, 
+                phone: form.phone.value.trim(), 
+                zip: form.zip.value.trim(), 
+                address: form.address.value.trim ()
+              }
+          };
+
+          const resp = await fetch('./charge.php', {    
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            
+          });
+
+          const text = await resp.text();
+          let json;
+          try { json = JSON.parse(text); } catch { json = null; }
+
+          if (!resp.ok) {
+            const message = (json && (json.message || json.error)) || text || 'Server error';
+            throw new Error(message);
+          }
+
+          if (json && json.success === true) {
+            resultEl.textContent = 'Payment successful. Reference Number: ' + (json.reference_number || '(none)');
+            localStorage.removeItem('cart'); hostedTokenization.resetForm(); form.reset();
+            renderSummary();
+          } else {
+            resultEl.textContent = 'Payment failed: ' + ((json && json.status) || 'Unknown');
+            submitBtn.disabled = false;
+          }
+        } catch (err) {
+          console.error('Charge error', err);
+          resultEl.textContent = 'Server error processing payment: ' + (err && err.message ? err.message : '');
+          submitBtn.disabled = false;
+        }
+      });
+   });
+
+   //<button onclick="pay()">Pay</button>
+  </script>
+</body>
+</html>
